@@ -28,6 +28,8 @@ type Group struct {
 	name      string // 一个 Group 可以认为是一个缓存的命名空间，每个 Group 拥有一个唯一的名称 name
 	getter    Getter // 回调(callback): 缓存未命中时获取源数据
 	mainCache cache  // 封装的lru，可并发的缓存
+
+	peers	  PeerPicker    // 分布式获取缓存
 }
 
 var (
@@ -80,7 +82,23 @@ func (g *Group) Get(key string) (ByteView, error) {
 	并且将源数据添加到缓存 mainCache 中（通过 populateCache 方法）
 */
 func (g *Group) load(key string) (ByteView, error) {
+	if g.peers != nil {
+		if peer, ok := g.peers.PickPeer(key); ok {
+			if value, err := g.getFromPeer(peer, key); err == nil {
+				return value, nil
+			}
+			log.Println("[GeeCache] Failed to get from peer", ok)
+		}
+	}
 	return g.getLocally(key)
+}
+
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	bytes, err := peer.Get(g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+	return ByteView{b: bytes}, nil
 }
 
 // 单机场景下获取数据（分布式场景下用另外api）
@@ -100,4 +118,13 @@ func (g *Group) populateCache(key string, value ByteView) {
 }
 
 
+/*
+	Group的方法： RegisterPeers() ，将 实现了 PeerPicker 接口的 HTTPPool 注入到 Group 中
+*/
+func (g *Group) RegisterPeers(peers PeerPicker) {
+	if g.peers != nil {
+		panic("RegisterPeerPicker called more than once")
+	}
+	g.peers = peers
+}
 
